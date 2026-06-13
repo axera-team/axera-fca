@@ -12,5 +12,6 @@
     "skipLibCheck": true,
     "types": ["node"],
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "node_modules/@types/**/*"],
+  "exclude": ["src/api/*"]
 }

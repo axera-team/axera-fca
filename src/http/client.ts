@@ -1,35 +1,60 @@
-
 /*
-* [utils/http/index.js] — HTTP request helper functions..
-*/
-import { getHeaders, getType } from '../utils/helpers';
-import logger from '../utils/logging';
+ * [http/client.js] — HTTP request helper functions..
+ */
+import type { CookieJar as CookieJarT } from 'tough-cookie';
+import type { Response as UndiciResponse } from 'undici';
+import { fetch, ProxyAgent, FormData as UndiciFormData } from 'undici';
+import { CookieAgent } from 'http-cookie-agent/undici';
+import { CookieJar } from 'tough-cookie';
 
-import { HttpCookieAgent, HttpsCookieAgent } from 'http-cookie-agent/http';
-
-import { Cookie, CookieJar } from 'tough-cookie';
 import qsLib from 'qs';
-import axios from "axios"
+
+import { getHeaders, getType } from '../utils/helpers';
+import { Logger } from '../utils/logging';
 
 // ============== HTTP CLIENT ==============
 
 // Next goal: replace qs with an internal implementation
+// Next goal: deprecate that getHeaders() bloat and replace with a more efficient internality
 
 /**
- *
- * @param {import('axios').AxiosResponse} res 
- * @returns {import('../types').HttpClientResponse}
+ * We need this temporarily to mimic request-based old bot clients
+ * @param res 
+ * @param url
+ * @param method
+ * @returns
  */
-const axiosResponseWrapper = (res) => ({
-  url: res.config.url,
-  statusCode: res.status,
-  statusMessage: res.statusText,
-  headers: res.headers,
-  body: res.data,
-  method: res.config.method
-});
+export const undiciResponseWrapper = async (res: UndiciResponse, url: string, method: string) => {
+  /**
+   * Undici response body is a Readable stream, so we need to consume it
+   * @link https://undici.nodejs.org/#/?id=undicifetchinput-init-promise
+   * @link https://undici.nodejs.org/#/examples/
+   */
+  const body = await res.text();
+  return {
+    ...res,
+    url,
+    statusCode: res.status,
+    statusMessage: res.statusText || '',
+    headers: Object.fromEntries(res.headers.entries()),
+    body,
+    method,
+  };
+};
 
-const axiosClient = Symbol('axiosClient');
+export type UndiciResponseWrapper = Awaited<ReturnType<typeof undiciResponseWrapper>>;
+
+// Will modernize this next update
+const normalizeQs = (qs) => {
+  if (getType(qs) !== "Object") return qs;
+  return Object.fromEntries(
+    Object.entries(qs).map(([key, value]) => [
+      key,
+      getType(value) === "Object" ? JSON.stringify(value) : value,
+    ]),
+  );
+}
+
 const sharedAgentsCache = Symbol('sharedAgentsCache');
 
 interface ProxyObject {
@@ -38,16 +63,37 @@ interface ProxyObject {
   port: number,
   auth?: { username: string, password: string }
 };
+
+// WILL MAKE THIS MORE SPECIFIC AND EXPLICIT TYPES NEXT UPDATE
+interface GetOptions {
+  url: string;
+  qs: object | null; // query string
+  ctx: object | null;
+}
+interface PostOptions {
+  url: string;
+  form: object | null;
+  ctx: object;
+}
+interface PostFormDataOptions {
+  url: string;
+  form: object | null;
+  qs: object;
+  ctx: object;
+}
   
 class HttpClient {
+  static readonly logger = new Logger({ scope: 'HttpClient', debugMode: false });
   static singletonInstance: HttpClient | null = null;
   static singletonEnabled: boolean = false;
   static [sharedAgentsCache]: Map<
     string,
-    { http: import("http").Agent; https: import("https").Agent }
+    import('undici').Dispatcher
   >;
-  #jar: import("tough-cookie").CookieJar;
-  [axiosClient]: import("axios").AxiosInstance | null = null;
+  #jar: CookieJarT;
+  #agent: import('undici').Dispatcher | null = null;
+  #clientCache: ReturnType<HttpClient['getClient']> | null = null;
+  #customHeaders: Record<string, any> | null = null;
 
   public proxy: string | ProxyObject | null;
   public keepAlive: boolean;
@@ -80,7 +126,7 @@ class HttpClient {
 
       const url = new URL(raw);
       const proxy: ProxyObject = {
-        protocol: url.protocol,
+        protocol: url.protocol.replace(":", ""),
         host: url.hostname,
         port: Number(url.port || 80),
       };
@@ -99,17 +145,16 @@ class HttpClient {
 
   // this an http.Agent module scoped factory
   /**
-   *
-   * @param getSharedAgentsOptions
-   * @returns
+   * Creates or retrieves a shared CookieAgent
+   * With undici, the CookieAgent handles both HTTP and HTTPS
    */
-  static getSharedAgents({ jar, keepAlive, maxSockets }: {
+  static getSharedAgent({ jar, keepAlive, maxSockets }: {
     jar: CookieJar | null;
-    keepAlive?: boolean | true;
-    maxSockets?: number | 20;
+    keepAlive?: boolean;
+    maxSockets?: number;
   } = { jar: null, keepAlive: true, maxSockets: 20 }) {
-    if (!jar || jar === null || !(jar instanceof CookieJar)) {
-      throw new Error("Invalid cookie jar!");
+    if (!jar || !(jar instanceof CookieJar)) {
+      throw new Error('Invalid cookie jar!');
     }
     if (!this[sharedAgentsCache]) {
       this[sharedAgentsCache] = new Map();
@@ -118,23 +163,16 @@ class HttpClient {
     const key = JSON.stringify({ keepAlive, maxSockets });
 
     if (!this[sharedAgentsCache].has(key)) {
-      this[sharedAgentsCache].set(key, {
-        http: new HttpCookieAgent({
-          cookies: { jar },
-          keepAlive,
-          maxSockets,
-        }),
-        https: new HttpsCookieAgent({
-          cookies: { jar },
-          keepAlive,
-          maxSockets,
-        }),
-      });
+      this[sharedAgentsCache].set(key, new CookieAgent({
+        cookies: { jar },
+        pipelining: keepAlive ? 1 : 0,
+        connections: maxSockets, // undici uses 'connections' instead of 'maxSockets'
+      }));
     }
     return this[sharedAgentsCache].get(key)!;
   }
 
-  constructor({ proxy, jar, keepAlive, timeout, maxSockets, singletonEnabled = false }: { proxy?: string | ProxyObject | null, jar?: CookieJar | null, keepAlive?: boolean, timeout?: number, maxSockets?: number, singletonEnabled?: boolean } = {}) {
+  constructor({ proxy, jar, keepAlive, timeout, maxSockets, singletonEnabled = true }: { proxy?: string | ProxyObject | null, jar?: CookieJar | null, keepAlive?: boolean, timeout?: number, maxSockets?: number, singletonEnabled?: boolean } = {}) {
     this.#jar = jar || new CookieJar();
 
     this.keepAlive = !!keepAlive!;
@@ -149,106 +187,138 @@ class HttpClient {
       }
       return HttpClient.singletonInstance;
     } else {
-      this.buildClient();
+      this.#buildClient();
     }
   }
 
   #buildClient() {
-    const agents = HttpClient.getSharedAgents({
+    const cookieAgent = HttpClient.getSharedAgent({
       jar: this.#jar,
       keepAlive: this.keepAlive,
       maxSockets: this.maxSockets,
     });
-    /**
-     * Equivalent to { jar: true } in old request...
-     * there's no { proxy }, as setProxy() will edit this later, which is the whole point of that setProxy() function.
-     * reusability bro.
-     */
-    const config = {
-      jar: this.#jar,
-      withCredentials: true,
-      httpAgent: agents.http,
-      httpsAgent: agents.https,
-      timeout: this.timeout,
-      proxy: HttpClient.parseProxyString(this.proxy) ?? false,
-    };
+    const proxyConfig = HttpClient.parseProxyString(this.proxy);
 
-    this[axiosClient] = axios.create(config);
+    if (proxyConfig) {
+      // If a proxy is configured, create a ProxyAgent that uses the CookieAgent
+      const proxyUri = `${proxyConfig.protocol}://${
+        proxyConfig.auth 
+          ? `${proxyConfig.auth.username}:${proxyConfig.auth.password}@` 
+          : ''
+      }${proxyConfig.host}:${proxyConfig.port}`;
+
+      this.#agent = new ProxyAgent({
+        uri: proxyUri,
+        connect: {
+          keepAlive: this.keepAlive,
+        },
+        // ProxyAgent doesn't directly chain with CookieAgent,
+        // so we use the factory pattern or set cookies manually
+      });
+
+      // Note: For full proxy + cookie support, you might need to create
+      // a custom dispatcher chain. See notes below.
+      HttpClient.logger.warn('Proxy support with CookieAgent requires custom dispatcher composition. See documentation.');
+    } else {
+      this.#agent = cookieAgent;
+    }
   }
 
   async #cleanGet(url: string) {
     try {
       if (!url || typeof url !== "string") throw new Error("url must be a string.");
-      if (!this[axiosClient]) throw new Error('axiosClient has not been initialized yet. call buildClient() first.')
-      const res = await this[axiosClient].get(url);
-      return axiosResponseWrapper(res);
+      if (!this.#agent) throw new Error('Agent has not been initialized yet. call buildClient() first.')
+      
+      const res = await fetch(url, {
+        dispatcher: this.#agent,
+        signal: AbortSignal.timeout(this.timeout)
+      });
+
+      return undiciResponseWrapper(res, url, "GET");
     } catch (error) {
-      logger.error("[cleanGet]: An error occurred\n", error);
-      throw new Error(error);
+      HttpClient.logger.error("[cleanGet]: An error occurred", error);
+      throw error;
     }
   }
 
-  async #get({ url, qs = {}, options = {}, ctx = {}, customHeader = {} } = {}) {
+  async #get(getOptions: GetOptions = { url: '', qs: {}, ctx: {} }) {
     try {
+      const { url, qs, ctx } = getOptions;
+
       if (!url || typeof url !== "string")
         throw new Error(`url must be a string. ${typeof url} was given when using cleanGet().`);
-      if (!this[axiosClient]) throw new Error('axiosClient has not been initialized yet. call buildClient() first.')
+      if (!this.#agent) throw new Error('Agent has not been initialized yet. call buildClient() first.')
 
-      const normalizedQs =
-        getType(qs) === "Object"
-          ? Object.fromEntries(
-              Object.entries(qs).map(([key, value]) => [
-                key,
-                getType(value) === "Object" ? JSON.stringify(value) : value,
-              ]),
-            )
-          : qs;
+      const normalizedQs = normalizeQs(qs);
 
-      const requestOptions = {
-        headers: getHeaders(url, options, ctx, customHeader),
-        params: normalizedQs,
-        paramsSerializer: (params) =>
-          qsLib.stringify(params, { arrayFormat: "repeat" }),
-      };
+      const queryString = qsLib.stringify(normalizedQs, { arrayFormat: "repeat" });
+      const fullUrl = queryString ? `${url}?${queryString}` : url;
 
-      const res = await this[axiosClient].get(url, requestOptions);
-      return axiosResponseWrapper(res);
+      const customHeaders = this.getCustomHeaders();
+      const customHeader = customHeaders ? customHeaders : null;
+
+      const headers = customHeader ? getHeaders({ url, ctx, customHeader }) : getHeaders({ url, ctx });
+
+      const res = await fetch(url, {
+        dispatcher: this.#agent,
+        headers,
+        signal: AbortSignal.timeout(this.timeout),
+      });
+
+      return await undiciResponseWrapper(res, fullUrl, "GET");
     } catch (error) {
-      logger.error("[get]: An error occurred\n", error);
-      throw new Error(error);
+      HttpClient.logger.error("[get]: An error occurred", error);
+      throw error;
     }
   }
 
-  async #post({ url, form, options = {}, ctx = {}, customHeader = {} } = {}) {
+  async #post(postOptions: PostOptions = { url: '', form: null, ctx: {} }) {
     try {
-      if (!this[axiosClient]) throw new Error('axiosClient has not been initialized yet. call buildClient() first.')
+      const { url, form, ctx } = postOptions;
       if (!url || typeof url !== "string") throw new Error("Please provide a valid URL when using post().");
+      if (!this.#agent) throw new Error('Agent has not been initialized yet. call buildClient() first.');
 
-      const data = qsLib.stringify(form);
+      const customHeaders = this.getCustomHeaders();
+      const customHeader = customHeaders ? customHeaders : null;
 
-      const requestOptions = {
-        headers: getHeaders(url, options, ctx, customHeader),
-      };
+      const headers = customHeader ? getHeaders({ url, ctx, customHeader }) : getHeaders({ url, ctx });
 
-      const res = await this[axiosClient].post(url, data, requestOptions);
-      return axiosResponseWrapper(res);
+      // Set content-type for URL-encoded forms!
+      if (!headers['content-type'] && !headers['Content-Type']) {
+        headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      }
+
+      const res = await fetch(url, {
+        method: 'POST',
+        dispatcher: this.#agent,
+        headers,
+        body: typeof form === 'string' ? form : qsLib.stringify(form),
+        signal: AbortSignal.timeout(this.timeout),
+      });
+
+      return await undiciResponseWrapper(res, url, 'POST');
     } catch (error) {
-      logger.error("[post]: An error occurred\n", error);
-      throw new Error(error);
+      HttpClient.logger.error("[post]: An error occurred", error);
+      throw error;
     }
   }
 
-  async #postFormData({ url, form, qs = {}, options = {}, ctx = {} } = {}) {
+  async #postFormData(postFormDataOptions: PostFormDataOptions = { url: '', form: null, qs: {}, ctx: {} }) {
     try {
+      const { url, form, qs, ctx } = postFormDataOptions;
+
       if (!url || !form) throw new Error("Please provide a valid URL and FormData object when using postFormData().");
-      if (!this[axiosClient]) throw new Error('axiosClient has not been initialized yet. call buildClient() first.');
+      if (!this.#agent) throw new Error('Agent has not been initialized yet. call buildClient() first.');
 
       // Build the FormData object if form is not a FormData but a plain object.
       let formData;
       if (form instanceof FormData) {
+        // Browser FormData is usable with undici directly.
+        formData = form;
+      } else if (form instanceof UndiciFormData) {
         formData = form;
       } else {
-        formData = new FormData();
+        formData = new UndiciFormData();
         for (const [key, value] of Object.entries(form)) {
           if (value !== undefined && value !== null) {
             formData.append(key, value);
@@ -257,61 +327,78 @@ class HttpClient {
       }
 
       // Normalize query params (stringify nested objects)
-      const normalizedQs =
-        getType(qs) === "Object"
-          ? Object.fromEntries(
-              Object.entries(qs).map(([key, value]) => [
-                key,
-                getType(value) === "Object" ? JSON.stringify(value) : value,
-              ]),
-            )
-          : qs;
+      const normalizedQs = normalizeQs(qs);
 
-      const requestOptions = {
-        headers: {
-          ...getHeaders(url, options, ctx),
-          ...formData.getHeaders(), // sets proper Content-Type with boundary
-        },
-        params: normalizedQs,
-        paramsSerializer: (params) =>
-          qsLib.stringify(params, { arrayFormat: "repeat" }),
-      };
+      // Serialize
+      const queryString = qsLib.stringify(normalizedQs, { arrayFormat: "repeat" });
+      const fullUrl = queryString ? `${url}?${queryString}` : url;
 
-      const res = await this[axiosClient].post(url, formData, requestOptions);
-      return axiosResponseWrapper(res);
+      // Prepare headers
+      const customHeaders = this.getCustomHeaders();
+      const customHeader = customHeaders ? customHeaders : null;
+      const headers = getHeaders({ url, ctx, customHeader });
+
+      const res = await fetch(fullUrl, {
+        method: 'POST',
+        dispatcher: this.#agent,
+        headers,
+        body: formData,
+        signal: AbortSignal.timeout(this.timeout),
+      });
+
+      return await undiciResponseWrapper(res, fullUrl, "POST");
     } catch (error) {
-      logger.error("[postFormData]: An error occurred\n", error);
-      throw new Error(error);
+      HttpClient.logger.error("[postFormData]: An error occurred", error);
+      throw error;
     }
   }
 
   /**
-   * Gets the Axios client for the HTTP client.
-   * @returns - The Axios client object.
+   * Use sparingly, too much weird headers can make you look suspicious to FB APIs
+   * @param headers An object containing custom headers if ever you want to add additional headers during request.
+   * @returns true | false
    */
-  get axiosClient() {
-    if (!this[axiosClient]) throw new Error("Axios client hasn't been initialized yet. use .buildClient() to build the http client.");
-    return Object.freeze(this[axiosClient]);
+  addCustomHeaders<T = any>(headers: Record<string, T> = {}) {
+    if (!this.#agent) throw new Error("HttpClient not initialized. Call buildClient() first.");
+    if (typeof headers !== "object" || headers === null) throw new Error("Please provide a valid object when using addCustomHeaders().");
+    if (Object.keys(headers).length === 0) return false;
+    if (Array.isArray(headers)) throw new Error("Please provide an object when using addCustomHeaders().");
+    this.#customHeaders = headers;
+    return true;
+  }
+
+  getCustomHeaders() {
+    return this.#customHeaders;
   }
 
   /**
-   * Builds the HTTP client.
-   * @returns
+   * Builds the HTTP Client
    */
   buildClient() {
-    if (!this[axiosClient]) this.#buildClient();
+    if (!this.#agent) this.#buildClient();
     return this;
+  }
+
+  /**
+   * Gets the Undici client for the HTTP client.
+   * @returns The Undici client.
+   */
+  get undiciClient() {
+    if (!this.#agent) throw new Error("Undici client hasn't been initialized yet. use .buildClient() to build the http client.");
+    return Object.freeze(this.#agent);
   }
 
   /**
    * Sets the proxy for the HTTP client.
    * @param proxyInput - The proxy input to set.
+   * @summary Remember to call buildClient() after setting the proxy.
    */
   setProxy(proxyInput: string | ProxyObject | null) {
     if (!proxyInput)
       throw new Error("Please provide a valid proxy when using setProxy(), but this HTTPClient will still work even without a proxy.");
     const proxy = HttpClient.parseProxyString(proxyInput);
     this.proxy = proxy;
+    this.#agent = null;
   }
 
   /**
@@ -327,6 +414,7 @@ class HttpClient {
    */
   removeProxy() {
     this.proxy = null;
+    this.#agent = null;
   }
 
   /**
@@ -336,8 +424,9 @@ class HttpClient {
    */
   setJar(newJar: CookieJar) {
     if (!(newJar instanceof CookieJar)) throw new Error("Please pass in a valid tough-cookie CookieJar instance.");
-    logger.warn("I hope you know what you're doing before setting a new CookieJar() to the HTTPClient.");
+    HttpClient.logger.warn("I hope you know what you're doing before setting a new CookieJar() to the HTTPClient.");
     this.#jar = newJar;
+    this.#agent = null; // Force rebuild agent with new jar
   }
 
   /**
@@ -354,21 +443,37 @@ class HttpClient {
    * @returns
    */
   getClient() {
-    if (!this[axiosClient]) {
+    if (!this.#agent) {
       throw new Error("HttpClient not initialized. Call buildClient() first.");
     }
-
     return Object.freeze({
       cleanGet: (url: string) => this.#cleanGet(url),
-      get: (args) => this.#get(args),
-      post: (args) => this.#post(args),
-      postFormData: (args) => this.#postFormData(args),
+      get: (args: GetOptions) => this.#get(args),
+      post: (args: PostOptions) => this.#post(args),
+      postFD: (args: PostFormDataOptions) => this.#postFormData(args),
+      postFormData: (args: PostFormDataOptions) => this.#postFormData(args),
     });
+  }
+
+  /**
+   * Gets the cached client of the HTTP client built with getClient().
+   * @description Before you use this, call buildClient().
+   * @returns
+   */
+  getCachedClient() {
+    if (!this.#clientCache) {
+      this.#clientCache = this.getClient();
+    }
+    return this.#clientCache;
   }
 }
 
-// ==============
+namespace HttpClient {
+  export type Client = ReturnType<HttpClient['getClient']>;
+}
 
+// ==============
 Object.freeze(HttpClient.prototype);
+
 
 export default HttpClient;

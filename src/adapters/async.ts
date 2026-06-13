@@ -1,35 +1,39 @@
-import { EventDomain, EventBus } from "../core/bus";
+import { EventBus } from "../core/bus";
 import { LoginEvent, LoginEvents } from "../core/events";
+
 import LoginFlow from "../flows/login";
 import Operation from "../core/operation";
 
-import { Cookie, FCAOptions, CancellablePromise } from "../types";
+import type { Cookie, FCAOptions, CancellablePromise } from "../types";
+
+import { defaultFCAOptions } from "../utils/constants";
 
 // AppEvents contain the domains that have the specific types for every event and corresponding output of that event.
 type AppEvents = {
   login: LoginEvents;
-}
+};
 
-export default async function loginAsync(cookie: Cookie, options: FCAOptions) {
+export async function loginAsync(cookie: Cookie, options?: FCAOptions | undefined) {
+  if (!options) options = defaultFCAOptions;
   if (Object.keys(options).length < 5) throw new Error(`Invalid/empty configuration provided to the FCA.`);
 
   const op = new Operation({ timeout: options.timeout });
   const bus = new EventBus<AppEvents>({ observability: !!options.eventBusSettings.observability });
 
-  const login = bus.domains.login || bus.createDomain("login");
+  const login = bus.createDomain("login");
   
   // Announce the start of the login process
-  login.emit("login:start", { fcaOptions: options });
+  login.emit(LoginEvent.START, { userID: null, fcaOptions: options });
   
   const promise = new Promise((resolve, reject) => {
-    const ok = (data) => {
+    const ok = ({ userID, appID, fcaOptions }: { userID: string, appID: string, fcaOptions: FCAOptions }) => {
       cleanup();
-      resolve(data.api);
+      resolve({ userID, appID, fcaOptions });
     };
 
-    const bad = (err) => {
+    const bad = ({ error }: { error: Error }) => {
       cleanup();
-      reject(err);
+      reject(error);
     };
 
     function cleanup() {
@@ -41,14 +45,14 @@ export default async function loginAsync(cookie: Cookie, options: FCAOptions) {
     login.once(LoginEvent.SUCCESS, ok);
     login.once(LoginEvent.ERROR, bad);
 
-    login.emit(LoginEvent.START, { cookie, fcaOptions: options });
+    login.emit(LoginEvent.START, { userID: null, fcaOptions: options });
 
-    const flow = new LoginFlow<AppEvents>({ cookie, options, operation: op });
+    const flow = new LoginFlow({ cookie, options, operation: op });
 
     // We pass the bus to the login processor so it gives us a response back.
-    flow.setBusNotifier(login);
+    flow.addChannel(login);
     flow.run(bus);
-  }) as CancellablePromise<LoginFlow<AppEvents>['api']>;
+  }) as CancellablePromise<any>;
 
   promise.cancel = () => op.cancel()
   

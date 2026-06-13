@@ -38,3 +38,15 @@ const { UserSession } = require('./session');
 
 const userSession = new UserSession();
 ```
+
+```js
+// single account — use PinVault directly
+const vault = new PinVault();
+await vault.unlock();
+const cookies = vault.readSession('default');
+
+// multi account — use SessionManager
+const manager = new SessionManager();
+await manager.unlock();
+const { sessionID } = await manager.createSession();
+```

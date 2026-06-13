@@ -1,57 +1,56 @@
 // adapters/callback.js
-import { EventBus, EventDomain } from "../core/bus";
-import EVENTS from "../core/events";
+import { EventBus } from "../core/bus";
+import { LoginEvent, LoginEvents, LoginCallback } from "../core/events";
 import Operation from "../core/operation";
 import LoginFlow from "../flows/login";
 import { Cookie, FCAOptions } from "../types";
 
-export default function loginCallback(cookie: Cookie, options: FCAOptions, cb: (eventName: string, payload: any) => void) {
+export function loginCallback(cookie: Cookie, options: FCAOptions, cb: LoginCallback) {
   const op = new Operation({ timeout: options.timeout });
-  const bus = new EventBus<{ login: EventDomain }>({ observability: !!options.eventBusSettings.observability });
-  const login = bus.domains.login || bus.createDomain("login");
-  
-  login.emit("start", { fcaOptions: options });
+  const bus = new EventBus<{ login: LoginEvents }>({ observability: !!options.eventBusSettings?.observability });
+  const login = bus.createDomain("login");
   
   try {
-    function done(evt: string, handler: (eventName: string, payload: any[]) => void) {
-      return (payload?: any) => {
-        if (payload.op !== op) return;
+    // p = promise containing data to return
+    // Create wrapped handlers
+    const success = createHandler(LoginEvent.SUCCESS, (eventName, payload) => cb(eventName, payload));
+    const error = createHandler(LoginEvent.ERROR, (eventName, payload) => cb(eventName, payload));
+    const cancelled = createHandler(LoginEvent.CANCELLED, (eventName, payload) => cb(eventName, payload));
+
+    function cleanup() {
+      login.off(LoginEvent.SUCCESS, success);
+      login.off(LoginEvent.ERROR, error);
+      login.off(LoginEvent.CANCELLED, cancelled);
+    }
+
+    function createHandler<T extends keyof LoginEvents>(
+      evt: T, 
+      handler: (eventName: T, payload: LoginEvents[T]) => void
+    ) {
+      return (payload: LoginEvents[T]) => {
         cleanup();
         handler(evt, payload);
       };
     }
-  
-    function cleanup() {
-      login.off(EVENTS.SUCCESS, success);
-      login.off(EVENTS.ERROR, error);
-      login.off(EVENTS.CANCELLED, cancelled);
-    }
-  
-    // p = promise containing data to return
-    const success = done(EVENTS.SUCCESS, (eventName, payload) => cb(EVENTS.SUCCESS, payload.api));
-    const error = done(EVENTS.ERROR, (eventName, payload) => cb(EVENTS.SUCCESS, payload.error));
-    const cancelled = done(EVENTS.CANCELLED, (eventName, payload) => cb(EVENTS.SUCCESS, payload.reason));
 
-
-    login.once(EVENTS.SUCCESS, success);
-    login.once(EVENTS.CANCELLED, cancelled);
-    login.on(EVENTS.ERROR, error);
+    // Set up listeners
+    login.once(LoginEvent.SUCCESS, success);
+    login.once(LoginEvent.CANCELLED, cancelled);
+    login.on(LoginEvent.ERROR, error);
     
-    login.emit(EVENTS.START, { cookie, options, op });
+    // Emit start event
+    login.emit(LoginEvent.START, { userID: null, fcaOptions: options });
   
     const flow = new LoginFlow({ cookie, options, operation: op });
-    flow.setBusNotifier(login);
+    flow.addChannel(login);
     flow.run(bus);
 
     return {
       cancel: () => op.cancel()
     };
-
   } catch (error) {
-    login.on(EVENTS.ERROR, () => cb(EVENTS.ERROR, error));
-    login.off(EVENTS.ERROR, () => cb(EVENTS.ERROR, error));
-    login.off(EVENTS.START, () => cb(EVENTS.START, error));
-    
-    cb(EVENTS.ERROR, error);
+    login.removeAllListeners();
+    login.emit(LoginEvent.ERROR, { error: error as Error });
+    cb(LoginEvent.ERROR, { error: error as Error });
   }
 };

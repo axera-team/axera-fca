@@ -59,7 +59,8 @@ export type FBApiParamsWithDefaults = FBApiParams & {
 /**
  * @description This is the user's session context generated after HTTP login and before MQTT connection.
  */
-export interface UserSessionContext {
+// Want access to .jar? itll be transferred to SessionManager!
+export interface SessionContext {
   mqttEndpoint?: string | null,
   region?: string | null,
   appID?: string | null,
@@ -68,12 +69,11 @@ export interface UserSessionContext {
   clientID?: string | null,
   sessionID?: string | null,
   lastSeqId?: string | null,
-  jar: import('tough-cookie').CookieJar,
   firstListen?: boolean | true,
   loggedIn?: boolean | true,
   access_token?: string | "NONE",
   clientMutationId?: number | 0,
-  mqttClient?: undefined,
+  mqttClient?: undefined | import('mqtt').MqttClient,
   syncToken?: undefined,
   wsReqNumber?: number | 0,
   wsTaskNumber?: number | 0,
@@ -123,7 +123,14 @@ export type Operation = typeof OperationClass;
 export type Appstate = import('tough-cookie').SerializedCookie[];
 export type Cookie = import('tough-cookie').SerializedCookie[];
 
-export type UserSession = {
+export type EncryptedCookie = {
+  vaulted: true;
+  vaultedAt: number;
+  signature: string;
+  vaultedSignature: string;
+};
+
+export type UserSessionType = {
   id: string;
   data: Appstate;
   filePath: string | null;
@@ -168,4 +175,4 @@ export interface ErrnoException extends Error {
   syscall?: string;
 }
 
-export type * from '../core/bus';
+export * from './fb';

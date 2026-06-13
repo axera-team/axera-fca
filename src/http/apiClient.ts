@@ -3,37 +3,46 @@ import HttpClient from "./client";
 
 import type {
   FBApiParams,
-  UserSessionContext,
-  FB_ACCOUNT_DTSG
+  SessionContext
 } from "../types/index";
-
-import {CookieJar} from "tough-cookie";
 
 interface GET_PARAMETERS {
   url?: string;
-  jar?: CookieJar;
-  query?: object;
+  query?: object | null;
   context?: object;
-  additionalHeaders?: object;
 }
 
 interface POST_PARAMETERS {
   url?: string;
-  jar?: CookieJar;
-  form?: object;
+  form?: object | null;
   context?: object;
-  additionalHeaders?: object;
+}
+
+interface POST_FORM_DATA_PARAMETERS {
+  url?: string;
+  form?: object | null;
+  query?: object | null;
+  context?: object;
+}
+
+interface APIClientOptions {
+  html?: string;
+  userID?: string;
+  sessionContext?: SessionContext & object;
+  httpClient?: null | HttpClient;
 }
 
 class ApiClient {
   #requestCounter = 1;
-  #fb_dtsg: FB_ACCOUNT_DTSG;
-  #revision;
-  #userID;
-  #ctx;
-  #ttstamp;
-  #jazoest;
-  #apiRequest;
+  #fb_dtsg: string;
+  #revision: string;
+  #userID: string;
+  #ctx: SessionContext;
+  #ttstamp: string;
+  #jazoest: string;
+
+  #httpClient: HttpClient.Client;
+  #httpClientInstance: HttpClient;
 
   /**
    * Initializes the ApiClient with the provided options.
@@ -44,12 +53,7 @@ class ApiClient {
     userID = "",
     sessionContext = {},
     httpClient = null,
-  }: {
-    html?: string;
-    userID?: string;
-    sessionContext?: object;
-    httpClient?: null | HttpClient;
-  } = {}) {
+  }: APIClientOptions = {}) {
     if (!html || typeof html !== "string") {
       throw new Error(
         "No valid HTML provided. Please pass a valid HTML string before using this class.",
@@ -83,21 +87,58 @@ class ApiClient {
     this.#userID = userID;
     this.#ctx = sessionContext;
 
-    this.#apiRequest = httpClient.buildClient().getClient();
+    this.#init(httpClient);
 
     Object.freeze(this);
+  }
+
+  #init(http: HttpClient) {
+    if (!this.#httpClient || this.#httpClient === null) {
+      http.buildClient();
+      this.#httpClient = http.getClient();
+    }
+
+    this.#httpClientInstance = http;
+  }
+
+  getClientConfig() {
+    return Object.freeze({
+      requestCounter: this.#requestCounter,
+      fb_dtsg: this.#fb_dtsg,
+      revision: this.#revision,
+      userID: this.#userID,
+      ttstamp: this.#ttstamp,
+      jazoest: this.#jazoest,
+      ctx: this.#ctx,
+    });
   }
 
   getApiClient() {
     const client = {
       /**
-       *
-       * @param {} args
+       * GET method for Facebook API. This is used for making GET requests to Facebook's API endpoints. It takes care of building the necessary parameters and headers required by Facebook, so you can simply provide the URL, query parameters, and any additional context needed for the request.
+       * @param args
        * @returns
        */
-      get: (args) => this.get(args),
-      post: (args) => this.post(args),
-      postFD: (args) => this.postFormData(args),
+      get: (args: GET_PARAMETERS) => this.get(args),
+      /**
+       * POST method for Facebook API. This is used for making POST requests to Facebook's API endpoints. It takes care of building the necessary parameters and headers required by Facebook, so you can simply provide the URL, form data, and any additional context needed for the request.
+       * @param args 
+       * @returns 
+       */
+      post: (args: POST_PARAMETERS) => this.post(args),
+      /**
+       * A shortcut for postFormData, as it's used a lot in the API. This is basically just an alias for postFormData, but it makes the code cleaner when making POST requests with form data.
+       * @param args 
+       * @returns 
+       */
+      postFD: (args: POST_FORM_DATA_PARAMETERS) => this.postFormData(args),
+      /**
+       * Post method specifically for form data. This is used for making POST requests that require form data, such as uploading files or sending messages with attachments. It ensures that the form data is properly formatted and sent to the Facebook API.
+       * @param args 
+       * @returns 
+       */
+      postFormData: (args: POST_FORM_DATA_PARAMETERS) => this.postFormData(args),
     };
     return Object.freeze(client);
   }
@@ -106,43 +147,52 @@ class ApiClient {
    * GET method to FB API
    * @param getOptions
    */
-  get({ url, query, context, additionalHeaders }: GET_PARAMETERS = {}) {
+  get({ url, query, context }: GET_PARAMETERS = {}) {
+    if (!url || typeof url !== "string") throw new Error("Invalid URL");
+    if (query && typeof query !== "object") throw new Error("Query parameters must be an object");
+    if (query === null) query = {};
+    //goal: make this readable
     const getConfig = {
       url,
       qs: this.buildFBApiParams(query),
-      globalOptions: this.#ctx.globalOptions,
       ctx: context || this.#ctx,
-      customHeader: additionalHeaders,
     };
-    return this.#apiRequest.get(getConfig);
+    return this.#httpClient.get(getConfig);
   }
 
   post({
     url,
     form,
-    context,
-    additionalHeaders,
+    context
   }: POST_PARAMETERS = {}) {
+    if (!url || typeof url !== "string") throw new Error("Invalid URL");
+    if (form && typeof form !== "object") throw new Error("Form data must be an object");
+    if (form === null) form = {};
     //goal: make this readable
     const postConfig = {
       url,
+      form: form ? form : null,
       qs: this.buildFBApiParams(form),
-      globalOptions: this.#ctx.globalOptions,
       ctx: context || this.#ctx,
-      customHeader: additionalHeaders,
     };
-    return this.#apiRequest.post(postConfig);
+    return this.#httpClient.post(postConfig);
   }
 
-  postFormData({ url, form, query, context }) {
+  postFormData({ url, form, query, context }: POST_FORM_DATA_PARAMETERS = {}) {
+    if (!url || typeof url !== "string") throw new Error("Invalid URL");
+    if (form && typeof form !== "object") throw new Error("Form data must be an object");
+    if (query && typeof query !== "object") throw new Error("Query parameters must be an object");
+    if (form === null) form = {};
+    if (query === null) query = {};
+
+    //goal: make this readable
     const postFormDataConfig = {
       url,
       form: this.buildFBApiParams(form),
       qs: this.buildFBApiParams(query),
-      globalOptions: this.#ctx.globalOptions,
       ctx: context || this.#ctx,
     };
-    return this.#apiRequest.postFormData(postFormDataConfig);
+    return this.#httpClient.postFormData(postFormDataConfig);
   }
 
   /**
@@ -156,7 +206,7 @@ class ApiClient {
    *
    * @returns - The configured parameters for Facebook API requests.
    */
-  buildFBApiParams(overrides = {}, context: UserSessionContext = {}) {
+  buildFBApiParams(overrides = {}, context: SessionContext | any = {}) {
     const params: FBApiParams = {
       av: this.#userID,
       __user: this.#userID,
@@ -204,6 +254,14 @@ class ApiClient {
   getFBApiParamsWithOverridesAndContext(overrides = {}, context = {}) {
     return this.buildFBApiParams(overrides, context);
   }
+
+  addCustomHeaders<T = any>(headers: Record<string, T> = {}) {
+    return this.#httpClientInstance.addCustomHeaders(headers);
+  }
+}
+
+namespace ApiClient {
+  export type Client = ReturnType<ApiClient['getApiClient']>;
 }
 
 Object.freeze(ApiClient.prototype);

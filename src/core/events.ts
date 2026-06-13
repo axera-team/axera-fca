@@ -15,14 +15,17 @@ export const LoginEvent = {
 } as const;
 
 export type LoginEvents = {
-  [LoginEvent.CANCELLED]: [{ event: string, signal: AbortSignal, time: number }];
-  [LoginEvent.START]: [{ cookie?: Cookie, fcaOptions: FCAOptions }];
-  [LoginEvent.PROGRESS]: [{ operation: Operation, step: string }];
+  [LoginEvent.CANCELLED]: { event: string, signal: AbortSignal, time: number };
+  [LoginEvent.START]: { userID: string | null, fcaOptions: FCAOptions };
+  [LoginEvent.PROGRESS]: { step: string, message: string | null, level: "info" | "warn" | "error" };
 
-  [LoginEvent.SUCCESS]:   [{ cookie: Cookie; fcaOptions: FCAOptions }];
-  [LoginEvent.ERROR]:     [{ error: Error }];
-  [LoginEvent.LOCKED]:    [{ reason: string }];
-  [LoginEvent.SUSPENDED]: [{ reason: string }];
+  [LoginEvent.SUCCESS]:   { userID: string, appID: string, fcaOptions: FCAOptions };
+  [LoginEvent.ERROR]:     { error: Error };
+  [LoginEvent.LOCKED]:    { reason: string };
+  [LoginEvent.SUSPENDED]: { reason: string };
 }
 
-export default { LoginEvent };
+export type LoginCallback = <K extends keyof LoginEvents>(
+  event: K,
+  payload: LoginEvents[K]
+) => void;

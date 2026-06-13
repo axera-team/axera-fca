@@ -5,11 +5,11 @@
  * @param {string} endpoint - The endpoint to send HTTP request to.
  * @description Syntatic sugar to build FB API URL
  */
-export function fbLink(endpoint) {
+export function fbLink(endpoint: string = ""): string {
   return "https://www.facebook.com" + (endpoint ? '/' + endpoint : '');
 }
 
-export function getTypeof(param) {
+export function getTypeof(param: unknown): string {
   let trueType;
 
   const state = {
@@ -118,7 +118,7 @@ export function getTypeof(param) {
   return trueType;
 }
 
-export function getStaticAPIs(apis) {
+export function getStaticAPIs(apis: Record<string, Function>): Record<string, Function> {
   if (getTypeof(apis) !== 'object') {
     throw new Error(`getStaticAPIs only accepts an object. Got ${getTypeof(apis)} instead.`);
   }
@@ -140,3 +140,4 @@ export * from './helpers';
 export * from './logging';
 export * from './presence';
 export * from './userAgent';
+export * from './formatters/index.js';

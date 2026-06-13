@@ -1,10 +1,13 @@
 "use strict";
-import * as Logger from './../utils/index';
+import { generatePresence, getType, Logger } from '../utils/index';
 import mqtt from 'mqtt';
 import websocket from 'websocket-stream';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import EventEmitter from 'node:events';
-import { parseDelta } from './deltas/value';
+import { parseDelta } from '../utils/parsers/parseDelta';
+import formatID from '../utils/formatters/value/formatID';
+
+const logger = new Logger({ scope: "listenMqtt" });
 
 let form = {};
 let getSeqID;
@@ -40,7 +43,7 @@ function calculate(previousTimestamp, currentTimestamp){
 function markAsRead(ctx, api, threadID) {
     if (ctx.globalOptions.autoMarkRead && threadID) {
         api.markAsRead(threadID, (err) => {
-            if (err) Logger.error("autoMarkRead", err);
+            if (err) logger.error("autoMarkRead", err);
         });
     }
 }
@@ -85,7 +88,7 @@ async function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
         host = `${domain}?sid=${sessionID}&cid=${cid}`;
     }
 
-    Logger.log("Connecting to MQTT with new IDs...", host);
+    logger.debug("Connecting to MQTT with new IDs...", host);
 
     const options = {
         clientId: 'mqttwsclient',
@@ -126,7 +129,7 @@ async function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
     });
     ctx.mqttClient = mqttClient;
     mqttClient.on('error', (err) => {
-        Logger.error("listenMqtt", err);
+        logger.error("listenMqtt", err);
         mqttClient.end();
         if (ctx.globalOptions.autoReconnect) getSeqID();
         else globalCallback({ type: "stop_listen", error: "Connection refused" });
@@ -145,9 +148,9 @@ async function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
             queue.initial_titan_sequence_id = ctx.lastSeqId;
             queue.device_params = null;
         }
-        Logger.log(`Successfully connected to MQTT.`);
+        logger.info(`Successfully connected to MQTT.`);
         const { name: botName = "Facebook User", uid = ctx.userID } = await api.getBotInitialData();
-        Logger.log(`Hello, ${botName} (${uid})`);
+        logger.info(`Hello, ${botName} (${uid})`);
         mqttClient.publish(topic, JSON.stringify(queue), { qos: 1, retain: false });
     });
 
@@ -155,10 +158,10 @@ async function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
     if (ctx.globalOptions.updatePresence) {
         presenceInterval = setInterval(() => {
             if (mqttClient.connected) {
-                const presencePayload = Logger.generatePresence(ctx.userID);
+                const presencePayload = generatePresence(ctx.userID);
                 mqttClient.publish('/orca_presence', JSON.stringify({ "p": presencePayload }), (err) => {
                     if (err) {
-                        Logger.error("Failed to send presence update:", err);
+                        logger.error("Failed to send presence update:", err);
                     }
                 });
             }
@@ -183,12 +186,12 @@ async function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
                     type: "typ",
                     isTyping: !!jsonMessage.state,
                     from: jsonMessage.sender_fbid.toString(),
-                    threadID: Logger.formatID((jsonMessage.thread || jsonMessage.sender_fbid).toString())
+                    threadID: formatID((jsonMessage.thread || jsonMessage.sender_fbid).toString())
                 };
                 globalCallback(null, typ);
             }
         } catch (ex) {
-            Logger.error("listenMqtt: onMessage", ex);
+            logger.error("listenMqtt: onMessage", ex);
         }
     });
 }
@@ -213,7 +216,7 @@ module.exports = (defaultFuncs, api, ctx) => {
                 })
             };
             const resData = await defaultFuncs.post("https://www.facebook.com/api/graphqlbatch/", ctx.jar, form).then(Logger.parseAndCheckLogin(ctx, defaultFuncs));
-            if (Logger.getType(resData) != "Array" || (resData.error && resData.error !== 1357001)) throw resData;
+            if (getType(resData) != "Array" || (resData.error && resData.error !== 1357001)) throw resData;
             ctx.lastSeqId = resData[0].o0.data.viewer.message_threads.sync_sequence_id;
             listenMqtt(defaultFuncs, api, ctx, globalCallback);
         } catch (err) {
@@ -258,7 +261,7 @@ module.exports = (defaultFuncs, api, ctx) => {
             try {
                 await api.markAsReadAll();
             } catch (err) {
-                Logger.error("Failed to mark all messages as read on startup:", err);
+                logger.error("Failed to mark all messages as read on startup:", err);
             }
         }
 
@@ -266,9 +269,9 @@ module.exports = (defaultFuncs, api, ctx) => {
 
         async function scheduleReconnect() {
             const time = getRandomReconnectTime();
-            Logger.log(`Scheduled reconnect in ${Math.floor(time / 60000)} minutes...`);
+            logger.info(`Scheduled reconnect in ${Math.floor(time / 60000)} minutes...`);
             reconnectInterval = setTimeout(() => {
-                Logger.log(`Reconnecting MQTT with new clientID...`);
+                logger.info(`Reconnecting MQTT with new clientID...`);
                 if (ctx.mqttClient) ctx.mqttClient.end(true);
                 ctx.clientID = generateUUID();
                 listenMqtt(defaultFuncs, api, ctx, globalCallback);

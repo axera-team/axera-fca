@@ -1,3 +1,4 @@
+import type { SessionContext as Context } from "../types";
 import Stream from "node:stream";
 
 /*
@@ -6,7 +7,34 @@ import Stream from "node:stream";
 import { presenceEncode } from './presence';
 import { headers, defaultUserAgent } from './constants';
 
-export const getRandom = arr => arr[Math.floor(Math.random() * arr.length)];
+import path from 'path';
+import fs from 'fs';
+
+export function findProjectRoot(startDir = process.cwd()) {
+  let dir = startDir
+  while (true) {
+    if (fs.existsSync(path.join(dir, 'package.json'))) {
+      return dir
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) throw new Error('Could not find project root')
+    dir = parent
+  }
+}
+
+export function fileToAppstate(filePath: string) {
+  try {
+    const appstate = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!Array.isArray(appstate)) {}
+    return { success: true, appstate };
+  } catch {
+    return { success: false, appstate: null };
+  }
+}
+
+// =============== START DEFINITIONS ===============
+
+export const getRandom = (arr: any[]) => arr[Math.floor(Math.random() * arr.length)];
 
 export function generateAccessiblityCookie() {
   const time = Date.now();
@@ -36,7 +64,7 @@ export function isReadableStream(obj: Stream.Readable) {
   return (obj instanceof Stream.Readable && typeof obj._read == "function"); // true or false
 }
 
-export function getType(obj) {
+export function getType(obj: any) {
   // more safe..
   if (obj === null) return "Null";
   if (obj === undefined) return "Undefined";
@@ -47,24 +75,17 @@ export function getSignatureID() {
   return Math.floor(Math.random() * 2147483648).toString(16);
 }
 
-export function arrayToObject(arr, getKey, getValue) {
+// weirdest debug i did
+export function arrayToObject(arr: any[]) {
   // only arrToForm() depends on this
   return arr.reduce((acc, val) => {
-    acc[getKey(val)] = getValue(val);
+    acc[val.name] = val.val;
     return acc;
   }, {});
 }
 
 export function arrToForm(form) {
-  return arrayToObject(
-    form,
-    function(v) {
-      return v.name;
-    },
-    function(v) {
-      return v.val;
-    }
-  );
+  return arrayToObject(form);
 }
 
 export function decodeClientPayload(payload: Uint8Array) {
@@ -121,40 +142,43 @@ interface CustomHeader {
   noRef?: boolean;
 }
 
-interface DeviceOptions {
-  userAgent?: string;
+interface GetHeadersOptions {
+  url: string;
+  ctx?: Context | null;
+  customHeader?: CustomHeader | null;
 }
 
-interface Context {
-  region?: string;
-}
-
-export function getHeaders(url: string, options: DeviceOptions = {}, ctx: Context = {}, customHeader: CustomHeader = {}) {
-  type NewHeaders<K extends keyof typeof headers> = {
-    "User-Agent": string;
-    host: string;
-    [K: string]: typeof headers[K];
+export function getHeaders(getOpts: GetHeadersOptions = { url: '', ctx: null, customHeader: null }) {
+  type NewHeaders<K extends typeof headers> = {
+    [P in keyof K]: K[P];
+  } & {
+    "host": string;
+    "referer"?: string,
+    "X-MSGR-Region"?: string;
   };
+  const { url, ctx, customHeader } = getOpts;
 
-  const newHeaders: NewHeaders<keyof typeof headers> = {
+  const newHeaders: NewHeaders<typeof headers> = {
+    // from [constants.js]
+    ...headers,
     host: new URL(url).hostname,
-    ...headers, // from [constants.js]
-    "User-Agent": customHeader.customUserAgent ?? options.userAgent ?? defaultUserAgent
+    referer: url,
   };
 
-  if (ctx.region) {
-    newHeaders["X-MSGR-Region"] = ctx.region;
+  if (ctx?.region) {
+    (newHeaders["X-MSGR-Region"] as string) = ctx.region;
   }
+
   Object.assign(newHeaders, customHeader);
   
-  if (customHeader.noRef) {
+  if (customHeader?.noRef) {
     delete newHeaders.referer;
   }
   
   return newHeaders;
 }
 
-export function generateThreadingID(clientID) {
+export function generateThreadingID(clientID: string) {
   const k = Date.now();
   const l = Math.floor(Math.random() * 4294967295);
   const m = clientID;
@@ -169,7 +193,7 @@ export function generateOfflineThreadingID() {
   return binaryToDecimal(msgs);
 }
 
-export function binaryToDecimal(data) {
+export function binaryToDecimal(data: string) {
   // only generateOfflineThreadingID() depends on this.
   let ret = "";
   while (data !== "0") {
@@ -202,7 +226,7 @@ export function getGUID() {
   return id;
 }
 
-export function generatePresence(userID) {
+export function generatePresence(userID: string) {
   // the hell is this?
   const time = (Date.now() / 1000).toString();
   const presenceData = {

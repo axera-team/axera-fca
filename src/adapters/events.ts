@@ -1,48 +1,65 @@
-import { EventBus, EventDomain } from "../core/bus";
-import Operation from "../core/operation";
-import LoginFlow from "../flows/login";
-import { Cookie, FCAOptions } from "../types";
+import type { Cookie, FCAOptions } from "../types";
+import { defaultFCAOptions } from "../utils";
+import { LoginEvent, LoginEvents } from "../core";
+import { EventBus } from "../core/bus";
 
-function loginEvents(cookie: Cookie, options: FCAOptions) {
-  // Enable observability if specified
-  const bus = new EventBus<{ login: EventDomain }>({ observability: !!options.eventBusSettings.observability });
+import Operation from "../core/operation";
+import Login from "../flows/login";
+
+function createLoginFlow(cookie: Cookie, options: FCAOptions) {
   const op = new Operation({ timeout: options.timeout });
-  const flow = new LoginFlow({ cookie, options, operation: op });
+  const bus = new EventBus<{ login: LoginEvents }>({ 
+    observability: !!options.eventBusSettings?.observability 
+  });
+  const login = bus.channel("login");
+  const flow = new Login({ cookie, options, operation: op });
+  
+  flow.addChannel(login);
+  
+  return { op, bus, login, flow };
+}
+
+function loginEventsInternal(cookie: Cookie, options: FCAOptions) {
+  // Enable observability if specified
+  const bus = new EventBus<{ login: LoginEvents }>({ observability: !!options.eventBusSettings.observability });
+  const operation = new Operation({ timeout: options.timeout });
+  const flow = new Login({ cookie, options, operation });
   
   (async () => {
     try {
       // Initialize login domain
-      bus.login = bus.createDomain("login");
-      bus.login.emit("start", { options });
+      const login = bus.channel("login");
+      login.emit(LoginEvent.START, { userID: null, fcaOptions: options });
       
-      flow.setBusNotifier(bus.login);
+      flow.addChannel(login);
       const result = await flow.run(bus);
       
       if (result.success) {
-        console.log(result);
-        bus.login.emit("success", { api: result.api, options });
+        login.emit(LoginEvent.SUCCESS, { userID: result.response?.userID || 'NONE', appID: result.response?.appID || "", fcaOptions: options });
       } else if (result.error) {
-        bus.login.emit("error", { error: result.error, options });
-      } else if (result.cancelled) {
-        bus.login.emit("cancelled", { reason: result.reason, options });
+        login.emit(LoginEvent.ERROR, { error: result.error });
       }
+
+      flow.registerAPIs();
+
     } catch (error) {
-      bus.login.emit("error", { critical: true, error, options });
+      bus.channel("login")?.emit(LoginEvent.ERROR, { error: error });
       throw error;
     }
   })();
 
   return {
-    bus,
-    cancel: () => op.cancel()
+    loginBus: bus.channel("login"),
+    cancel: () => operation.cancel()
   };
 };
 
-export default function (cookie, options = {}) {
+export function loginEvents(cookie: Cookie, options?: FCAOptions | undefined) {
   try {
-    const login = loginEvents(cookie, options);
-    return { success: true, api: login.api, error: null, cancelled: this.cancelled };
+    if (!options) options = defaultFCAOptions;
+    if (Object.keys(options).length < 5) throw new Error(`Invalid/empty configuration provided to the FCA.`);
+    return loginEventsInternal(cookie, options);
   } catch (err) {
-    return { success: false, error: err, cancelled: this.cancelled };
+    throw err;
   }
 };
