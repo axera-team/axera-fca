@@ -6,5 +6,3 @@ export * from './store/index.js';
 export * from './utils/index.js';
 
 export type * from './types';
-
-//yo
