@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import HttpClient from "../http/client";
 import { Logger } from "../utils/logging";
 
-import type { ConfigTypeMap as FB, SessionContext } from "../types";
+import type { ConfigTypeMap as FB, UserSessionContext } from "../types";
 
 const ERROR_RETRIEVING = "Failed to retrieve userID. This can be caused by many factors, an expired appstate or being blocked by Facebook for logging in from an unknown location. Try logging in with a browser to verify.";
 
@@ -26,7 +26,7 @@ interface AuthenticatedResult {
 type ConfigReturnType<K extends keyof FB> = FB[K];
 
 export class LoginUtilities {
-  static readonly logger = new Logger({ scope: "LoginUtilities", color: 'candy' });
+  static readonly logger = new Logger({ scope: "LoginUtilities", color: 'atlas' });
 
   static getFbURL(endpoint = '') {
     return `https://www.facebook.com${endpoint ? '/' + endpoint : ''}`;
@@ -66,6 +66,7 @@ export class LoginUtilities {
   
   static getMQTTEndpoint(html: string, { bypassRegion = false }) {
     this.logger.info("Getting MQTT endpoint...");
+
     const MQTT_MATCHES = {
       oldFBMQTTMatch: html.match(/irisSeqID:"(.+?)",appID:219994525426954,endpoint:"(.+?)"/),
       newFBMQTTMatch: html.match(/{"app_id":"219994525426954","endpoint":"(.+?)","iris_seq_id":"(.+?)"}/),
@@ -102,6 +103,10 @@ export class LoginUtilities {
           throw new Error(`Unexpected MQTT_MATCH key: ${key}, No FB MQTT match found, FB might added breaking changes recently, please report this issue to the developer.`);
       }
     }
+
+    if (!region) {
+      region = this.getAccountRegionFromHTML(html);
+    }
     
     this.logger.info("Retrieved MQTT server endpoint.");
     
@@ -116,21 +121,61 @@ export class LoginUtilities {
   static getAccountRegion(mqttEndpoint: string) {
     if (!mqttEndpoint || typeof mqttEndpoint !== "string")
       throw new Error("MQTT endpoint is not provided");
-    console.info({ mqttEndpoint });
-    const region = new URL(mqttEndpoint).searchParams.get("region");
+    let region = new URL(mqttEndpoint).searchParams.get("region");
+    return region?.toUpperCase() || null;
+  }
+
+  static getAccountRegionFromHTML(html: string) {
+    const findConfig = this.setupConfigFinder(html);
+    const mqttWebConfig = findConfig('MqttWebConfig');
+    const region = new URL(mqttWebConfig?.endpoint || "").searchParams.get("region");
+
+    if (!region) {
+      const messengerRegion = findConfig('MessengerWebRegion');
+      return messengerRegion?.regionNullable?.toUpperCase() || null;
+    }
+
     return region?.toUpperCase() || null;
   }
 
   static getAppID(html: string) {
     const findConfig = this.setupConfigFinder<FB>(html);
+    const serverAppID = findConfig('ServerAppID');
     const currentUserData = findConfig('CurrentUserInitialData');
-    return currentUserData && currentUserData.APP_ID ? currentUserData.APP_ID : null;
+    const analyticsCoreData = findConfig('AnalyticsCoreData');
+
+    const userAppID = currentUserData?.APP_ID ?? null;
+    const serverID = serverAppID?.app_id ?? null;
+    const analyticsID = analyticsCoreData?.app_id ?? null;
+
+    console.dir({ serverID, userAppID, analyticsID }, { depth: null });
+
+    const allEqual = serverID === userAppID && userAppID === analyticsID;
+    
+    if (allEqual) {
+        return userAppID; // or any of them, they're the same
+    }
+
+    // return the first truthy one
+    return serverID ?? userAppID ?? analyticsID ?? null;
   }
   
   static getClientID(html: string) {
     const clientID = html.match(/\["MqttWebDeviceID",\[\],{"clientID":"(.*?)"/);
+
+    if (!clientID) {
+      return this.getClientIDFromHTML(html);
+    }
+
     return clientID ? clientID[1] : null;
   }
+
+  static getClientIDFromHTML(html: string) {
+    const findConfig = this.setupConfigFinder<FB>(html);
+    const mqttWebDeviceID = findConfig('MqttWebDeviceID');
+    return mqttWebDeviceID && mqttWebDeviceID.clientID ? mqttWebDeviceID.clientID : null;
+  }
+
   static getDeviceID(html: string) {
     const deviceID = html.match(/\["AnalyticsCoreData",\[\],{"device_id":"(.*?)"/);
     return deviceID ? deviceID[1] : null;
@@ -142,18 +187,12 @@ export class LoginUtilities {
    * @returns
    */
   static getUserID(cookies: Cookie[]): string | null {
-    console.info("Retrieving user ID from cookies...");
-    console.info({ raw: cookies, cookies: cookies.map(c => c.toJSON()) });
-
     const parsedCookies = cookies.map(c => c.toJSON());
     const primaryProfile = parsedCookies.find(cookie => cookie.key === "c_user");
     const secondaryProfile = parsedCookies.find(cookie => cookie.key === "i_user");
-    console.dir({ primaryProfile, secondaryProfile }, { depth: null });
 
     const primaryProfileUserID = primaryProfile ? primaryProfile.value : null;
     const secondaryProfileUserID = secondaryProfile ? secondaryProfile.value : null;
-
-    console.dir({ primaryProfileUserID, secondaryProfileUserID }, { depth: null });
 
     return (primaryProfileUserID ? primaryProfileUserID : secondaryProfileUserID) || null;
   }
@@ -286,7 +325,7 @@ class LoginHelpers extends LoginUtilities {
    * @param jar 
    * @returns 
    */
-  static async buildSessionContext(html: string, jar: CookieJar): Promise<SessionContext> {
+  static async buildSessionContext(html: string, jar: CookieJar): Promise<UserSessionContext> {
     const cookies = await jar.getCookies(LoginHelpers.getFbURL());
     const userID = this.getUserID(cookies);
     
@@ -342,7 +381,7 @@ class LoginHelpers extends LoginUtilities {
       wsReqNumber: 0,
       wsTaskNumber: 0,
       reqCallbacks: {}
-    } satisfies SessionContext;
+    } satisfies UserSessionContext;
   }
   
   /**
@@ -357,7 +396,7 @@ class LoginHelpers extends LoginUtilities {
     httpClient: HttpClient;
     html: string;
     userID: string;
-    sessionContext: SessionContext;
+    sessionContext: UserSessionContext;
   }) {
     if (!httpClient || !html || !userID || !sessionContext) {
       throw new Error("httpClient, html, userID, and sessionContext are required");
@@ -373,7 +412,7 @@ class LoginHelpers extends LoginUtilities {
       httpClient,
       html,
       userID,
-      sessionContext,
+      userSessionContext: sessionContext,
     });
     return apiClient;
   }

@@ -13,12 +13,12 @@ export function loginCallback(cookie: Cookie, options: FCAOptions, cb: LoginCall
   try {
     // p = promise containing data to return
     // Create wrapped handlers
-    const success = createHandler(LoginEvent.SUCCESS, (eventName, payload) => cb(eventName, payload));
+    const success = createHandler(LoginEvent.COMPLETE, (eventName, payload) => cb(eventName, payload));
     const error = createHandler(LoginEvent.ERROR, (eventName, payload) => cb(eventName, payload));
     const cancelled = createHandler(LoginEvent.CANCELLED, (eventName, payload) => cb(eventName, payload));
 
     function cleanup() {
-      login.off(LoginEvent.SUCCESS, success);
+      login.off(LoginEvent.COMPLETE, success);
       login.off(LoginEvent.ERROR, error);
       login.off(LoginEvent.CANCELLED, cancelled);
     }
@@ -34,12 +34,12 @@ export function loginCallback(cookie: Cookie, options: FCAOptions, cb: LoginCall
     }
 
     // Set up listeners
-    login.once(LoginEvent.SUCCESS, success);
+    login.once(LoginEvent.COMPLETE, success);
     login.once(LoginEvent.CANCELLED, cancelled);
     login.on(LoginEvent.ERROR, error);
     
     // Emit start event
-    login.emit(LoginEvent.START, { userID: null, fcaOptions: options });
+    login.emit(LoginEvent.START, { fcaOptions: options });
   
     const flow = new LoginFlow({ cookie, options, operation: op });
     flow.addChannel(login);

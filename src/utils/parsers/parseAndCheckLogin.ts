@@ -38,7 +38,7 @@ function updateDTSG(ctx: any, require: any[]): void {
   }
 }
 
-export default function parseAndCheckLogin(ctx: any, http: any, retryCount = 0) {
+export function parseAndCheckLogin(ctx: any, http: any, retryCount = 0) {
   return async (data: any): Promise<any> => {
     // 5xx retry
     if (data.statusCode >= 500 && data.statusCode < 600) {

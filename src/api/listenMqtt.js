@@ -1,13 +1,20 @@
+//@ts-nocheck
 "use strict";
-import { generatePresence, getType, Logger } from '../utils/index';
 import mqtt from 'mqtt';
 import websocket from 'websocket-stream';
-import { HttpsProxyAgent } from 'https-proxy-agent';
 import EventEmitter from 'node:events';
-import { parseDelta } from '../utils/parsers/parseDelta';
-import formatID from '../utils/formatters/value/formatID';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
-const logger = new Logger({ scope: "listenMqtt" });
+import { formatID, parseDelta, parseAndCheckLogin, generatePresence, getType, Logger } from '../utils/index';
+
+const logger = new Logger({ scope: "MQTT Listener", color: 'retro' });
+
+class ListenMQTTError extends Error {
+    constructor(message, originalError) {
+        super(message);
+        this.originalError = originalError;
+    }
+}
 
 let form = {};
 let getSeqID;
@@ -35,11 +42,6 @@ function calculate(previousTimestamp, currentTimestamp){
     return Math.floor(previousTimestamp + (currentTimestamp - previousTimestamp) + 300);
 }
 
-/**
- * @param {Object} ctx
- * @param {Object} api
- * @param {string} threadID
- */
 function markAsRead(ctx, api, threadID) {
     if (ctx.globalOptions.autoMarkRead && threadID) {
         api.markAsRead(threadID, (err) => {
@@ -49,21 +51,22 @@ function markAsRead(ctx, api, threadID) {
 }
 
 /**
- * @param {Object} defaultFuncs
- * @param {Object} api
- * @param {Object} ctx
- * @param {Function} globalCallback
+ * 
+ * @param {*} defaultFuncs 
+ * @param {*} api 
+ * @param {import('../src/types').UserSessionContext} ctx 
+ * @param {*} globalCallback 
  */
 async function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
-    const chatOn = ctx.globalOptions.online;
     const region = ctx.region;
     const foreground = false;
     const sessionID = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER) + 1;
     const cid = ctx.clientID;
+
     const username = {
         u: ctx.userID,
         s: sessionID,
-        chat_on: chatOn,
+        chat_on: true,
         fg: foreground,
         d: cid,
         ct: 'websocket',
@@ -80,6 +83,7 @@ async function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
         a: ctx.globalOptions.userAgent
     };
     const cookies = ctx.jar.getCookiesSync('https://www.facebook.com').join('; ');
+
     let host;
     const domain = "wss://edge-chat.messenger.com/chat";
     if (region) {
@@ -115,6 +119,7 @@ async function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
     };
 
     if (ctx.globalOptions.proxy) options.wsOptions.agent = new HttpsProxyAgent(ctx.globalOptions.proxy);
+
     const mqttClient = new mqtt.Client(_ => websocket(host, options.wsOptions), options);
     mqttClient.publishSync = mqttClient.publish.bind(mqttClient);
     mqttClient.publish = (topic, message, opts = {}, callback = () => {}) => new Promise((resolve, reject) => {
@@ -128,6 +133,7 @@ async function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
         });
     });
     ctx.mqttClient = mqttClient;
+    
     mqttClient.on('error', (err) => {
         logger.error("listenMqtt", err);
         mqttClient.end();
@@ -196,7 +202,15 @@ async function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
     });
 }
 
+/**
+ * 
+ * @param {ReturnType<import('../types').ApiClient['getApiClient']>} defaultFuncs 
+ * @param {*} api 
+ * @param {*} ctx 
+ * @returns 
+ */
 module.exports = (defaultFuncs, api, ctx) => {
+    /** @type {((args: any) => void)} */
     let globalCallback = () => {};
     let reconnectInterval;
     getSeqID = async () => {
@@ -215,14 +229,14 @@ module.exports = (defaultFuncs, api, ctx) => {
                     }
                 })
             };
-            const resData = await defaultFuncs.post("https://www.facebook.com/api/graphqlbatch/", ctx.jar, form).then(Logger.parseAndCheckLogin(ctx, defaultFuncs));
-            if (getType(resData) != "Array" || (resData.error && resData.error !== 1357001)) throw resData;
-            ctx.lastSeqId = resData[0].o0.data.viewer.message_threads.sync_sequence_id;
+            const resData = await defaultFuncs.post({ url: "https://www.facebook.com/api/graphqlbatch/", context: ctx, form })
+            console.dir({ intercept: resData.body })
+            const res = await parseAndCheckLogin(ctx, defaultFuncs)(resData);
+            if (getType(res) != "Array" || (res.error && res.error !== 1357001)) throw res;
+            ctx.lastSeqId = res[0].o0.data.viewer.message_threads.sync_sequence_id;
             listenMqtt(defaultFuncs, api, ctx, globalCallback);
         } catch (err) {
-            const descriptiveError = new Error("Failed to get sequence ID. This is often caused by an invalid appstate. Please try generating a new appstate.json file.");
-            descriptiveError.originalError = err;
-            return globalCallback(descriptiveError);
+            return globalCallback(new ListenMQTTError("Failed to get sequence ID. This is often caused by an invalid appstate. Please try generating a new appstate.json file.", err));
         }
     };
 

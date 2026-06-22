@@ -1,7 +1,9 @@
-/// ApiLoader caches the class once
+/// ApiRegistry stored all the apis
+/// ApiManager handles actions
 
 import { BaseAPI as Api, ApiConstructor, ApiConstructorType } from "./api";
 import { ApiClient, SessionContext } from "../types";
+
 import APIRegistry from "./api-registry";
 
 class ApiLoaderError extends Error {
@@ -49,19 +51,19 @@ export class LegacyModule extends Api {
  */
 export class ApiManager {
   #apiClient: ApiClient;
-  #ctx: SessionContext;
+  #userSessionContext: SessionContext;
 
-  static _extendsApi(ModuleClass: Function): boolean {
+  private static _extendsApi(ModuleClass: Function): boolean {
     return this._isApiInstance(ModuleClass) || ModuleClass === Api;
   }
 
-  static _isApiInstance(ModuleClass: Function): boolean {
+  private static _isApiInstance(ModuleClass: Function): boolean {
     return ModuleClass instanceof ApiConstructor || (ModuleClass.prototype instanceof Api);
   }
 
   constructor({ apiClient, sessionContext }: { apiClient: ApiClient, sessionContext: SessionContext }) {
     this.#apiClient = apiClient;
-    this.#ctx = sessionContext;
+    this.#userSessionContext = sessionContext;
   }
 
   get(name: string): Api {
@@ -73,7 +75,7 @@ export class ApiManager {
 
     const instance = new ModuleClass({
       apiClient: this.#apiClient,
-      userContext: this.#ctx
+      userContext: this.#userSessionContext
     });
 
     if (!instance || !(instance instanceof Api)) {

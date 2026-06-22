@@ -134,6 +134,7 @@ export function getStaticAPIs(apis: Record<string, Function>): Record<string, Fu
   return Object.freeze(apis);
 }
 
+export * from './parsers';
 export * from './constants';
 export * from './cookies';
 export * from './helpers';

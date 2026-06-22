@@ -1,14 +1,13 @@
-
-import Operation from "../core/operation";
-import { Cookie, FCAOptions } from "../types";
+import { LoginResult, FCAOptions } from "../types";
 
 export const LoginEvent = {
   CANCELLED: "operation:cancelled",
   START: "login:start",
   PROGRESS: "login:progress",
   
-  SUCCESS: "login:success",
+  COMPLETE: "login:complete",
   ERROR: "login:error",
+  FAILED: "login:failed",
 
   LOCKED: "account:locked",
   SUSPENDED: "account:suspended",
@@ -16,10 +15,30 @@ export const LoginEvent = {
 
 export type LoginEvents = {
   [LoginEvent.CANCELLED]: { event: string, signal: AbortSignal, time: number };
-  [LoginEvent.START]: { userID: string | null, fcaOptions: FCAOptions };
+  [LoginEvent.START]: { fcaOptions: FCAOptions };
   [LoginEvent.PROGRESS]: { step: string, message: string | null, level: "info" | "warn" | "error" };
 
-  [LoginEvent.SUCCESS]:   { userID: string, appID: string, fcaOptions: FCAOptions };
+  [LoginEvent.COMPLETE]:   LoginResult;
+  
+  [LoginEvent.FAILED]:    {
+    code: "LOGIN_FAILURE_NO_SESSION_CONTEXT",
+    success: false,
+    response: null,
+    error: Error,
+    cancelled: boolean,
+  } | {
+    code: "LOGIN_FAILURE_INTERNAL_ERROR",
+    success: false,
+    response: null,
+    error: Error,
+    cancelled: boolean,
+  } | {
+    code: 'LOGIN_FAILURE_CATCH_INTERNAL_ERROR',
+    success: false,
+    response: null,
+    error: Error,
+    cancelled: boolean
+  }
   [LoginEvent.ERROR]:     { error: Error };
   [LoginEvent.LOCKED]:    { reason: string };
   [LoginEvent.SUSPENDED]: { reason: string };

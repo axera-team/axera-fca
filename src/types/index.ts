@@ -60,7 +60,9 @@ export type FBApiParamsWithDefaults = FBApiParams & {
  * @description This is the user's session context generated after HTTP login and before MQTT connection.
  */
 // Want access to .jar? itll be transferred to SessionManager!
-export interface SessionContext {
+export interface UserSessionContext {
+  /** Temporary while we patch things up */
+  globalOptions?: FCAOptions;
   mqttEndpoint?: string | null,
   region?: string | null,
   appID?: string | null,
@@ -173,6 +175,46 @@ export interface ErrnoException extends Error {
   code?: string;
   path?: string;
   syscall?: string;
+}
+
+/**
+ * The Old Infamous CJS Factory
+ * 
+ * ```js
+ * function(defaultFuncs, api, ctx) { 
+ *  return function() {}
+ * }
+ * ```
+ * 
+ * @deprecated This is the old way API modules were defined, and is still supported for backward compatibility. However, it is recommended to use the new class-based approach for better readability, maintainability, and type safety.
+ * 
+ * @param defaultFuncs - Default functions refer to API HTTP Client (get, post, postFormData) that can be used to make API calls, and are passed as the first argument to the factory function for backward compatibility. However, it is recommended to use the API client provided in the new class-based approach for better consistency and maintainability.
+ * @param api - The API object containing all the currently loaded API modules, which can be used to call other API modules within an API module. This is passed as the second argument to the factory function for backward compatibility, but it is recommended to use the new class-based approach for better readability and maintainability.
+ * @param ctx - The session context, which contains information about the current session, such as userID, appID, etc.
+ * 
+ * @returns A function that does a specific task, which can be used to interact with the Facebook Messenger API.
+ * 
+ * This is the old way API modules were defined, and is still supported for backward compatibility. However, it is recommended to use the new class-based approach for better readability, maintainability, and type safety.
+ */
+export interface ApiModuleV1 {
+  default: (defaultFuncs: ApiClient['getApiClient'], api: LoginFlow['API'], ctx: UserSessionContext) => (...args: any[]) => Promise<any> | any;
+}
+
+export interface ApiModuleV2 {
+  name: string;
+  execute(...args: any[]): Promise<any>;
+}
+
+
+export interface LoginResult {
+  code: string;
+  success: boolean;
+  response: { 
+    apiClient: ReturnType<ApiClient['getApiClient']>,
+    userSessionContext: UserSessionContext
+  } | null;
+  error: Error | null;
+  cancelled: boolean;
 }
 
 export * from './fb';

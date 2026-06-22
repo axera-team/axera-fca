@@ -1,10 +1,12 @@
 import type { Cookie, FCAOptions } from "../types";
-import { defaultFCAOptions } from "../utils";
+import { defaultFCAOptions, Logger } from "../utils";
 import { LoginEvent, LoginEvents } from "../core";
 import { EventBus } from "../core/bus";
 
 import Operation from "../core/operation";
 import Login from "../flows/login";
+
+const logger = new Logger({ scope: "FCA", color: "instagram", debugMode: true })
 
 function createLoginFlow(cookie: Cookie, options: FCAOptions) {
   const op = new Operation({ timeout: options.timeout });
@@ -29,18 +31,33 @@ function loginEventsInternal(cookie: Cookie, options: FCAOptions) {
     try {
       // Initialize login domain
       const login = bus.channel("login");
-      login.emit(LoginEvent.START, { userID: null, fcaOptions: options });
+      login.emit(LoginEvent.START, { fcaOptions: options });
       
       flow.addChannel(login);
       const result = await flow.run(bus);
       
       if (result.success) {
-        login.emit(LoginEvent.SUCCESS, { userID: result.response?.userID || 'NONE', appID: result.response?.appID || "", fcaOptions: options });
+        login.emit(LoginEvent.COMPLETE, result);
       } else if (result.error) {
         login.emit(LoginEvent.ERROR, { error: result.error });
       }
 
+      const isMqttListening = result?.response?.userSessionContext?.mqttClient ?? null;
+      if (!isMqttListening) {
+        logger.info('Login was successful, you may now call api.listenMqtt()!')
+      }
+
       flow.registerAPIs();
+
+      console.dir({ apis: flow.getAllAPIs(), count: flow.getApiCount() }, { depth: null })
+
+      const api = flow.getAPI('listenMqtt');
+
+      if (api) {
+        api();
+      }
+      //@ts-ignore
+      login.emit('login:session', flow);
 
     } catch (error) {
       bus.channel("login")?.emit(LoginEvent.ERROR, { error: error });

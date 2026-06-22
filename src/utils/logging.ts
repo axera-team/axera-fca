@@ -3,7 +3,7 @@
  */
 
 import pc from "picocolors";
-import gradient from "gradient-string";
+import gradient, { atlas, rainbow, cristal, fruit, instagram, mind, morning, passion, pastel, retro, teen, summer, vice } from "gradient-string";
 
 const LEVEL_COLORS = {
   INFO: pc.cyan,
@@ -21,7 +21,7 @@ const LEVEL_SYMBOLS = {
   DEBUG: "🐛",
 };
 
-const GRADIENTS = {
+const GRADIENTS: Record<string, ReturnType<typeof gradient>> = {
   sunset: gradient(['#ff0080', '#ff8c00', '#40e0d0']),
   ocean: gradient(['#00b4db', '#0083b0']),
   rainbow: gradient(['red', 'yellow', 'green', 'cyan', 'blue', 'magenta']),
@@ -30,6 +30,7 @@ const GRADIENTS = {
   forest: gradient(['#00ff00', '#00cc00', '#009900']),
   purple: gradient(['#9d00ff', '#ff00cc']),
   candy: gradient(['#ff6b6b', '#4ecdc4', '#45b7d1']),
+  atlas, cristal, fruit, instagram, mind, morning, passion, pastel, retro, teen, summer, vice
 };
 
 export class Logger {
@@ -38,20 +39,20 @@ export class Logger {
   static instance: Logger | null = null;
 
   scope?: string;
-  scopeStyle: string | ((text: string) => string) | any;
+  scopeColor: string | any;
   debugMode: boolean;
 
-  constructor(options?: { scope?: string, color?: keyof typeof pc | keyof typeof GRADIENTS | ((text: string) => string), debugMode?: boolean }) {
+  constructor(options?: { scope?: string, color?: keyof typeof pc | keyof typeof GRADIENTS, debugMode?: boolean }) {
     this.scope = options?.scope;
     this.debugMode = options?.debugMode || false;
 
     if (options?.color) {
       if (typeof options.color === 'function') {
-        this.scopeStyle = options.color;
+        throw new Error('Function arguments are not supported in the logger!');
       } else if (GRADIENTS[options.color as keyof typeof GRADIENTS]) {
-        this.scopeStyle = GRADIENTS[options.color as keyof typeof GRADIENTS];
+        this.scopeColor = GRADIENTS[options.color as keyof typeof GRADIENTS];
       } else if (pc[options.color as keyof typeof pc]) {
-        this.scopeStyle = pc[options.color as keyof typeof pc];
+        this.scopeColor = pc[options.color as keyof typeof pc];
       }
     }
   }
@@ -63,8 +64,8 @@ export class Logger {
     const scopeText = this.scope ?? "APP";
     
     let coloredScope: string;
-    if (typeof this.scopeStyle === 'function') {
-      coloredScope = this.scopeStyle(scopeText);
+    if (typeof this.scopeColor === 'function') {
+      coloredScope = this.scopeColor(scopeText);
     } else {
       coloredScope = pc.white(scopeText);
     }

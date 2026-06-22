@@ -1,5 +1,5 @@
 "use strict";
-import { NUM_TO_MONTH, NUM_TO_DAY } from "../../constants.js";
+import { NUM_TO_MONTH, NUM_TO_DAY } from "../../constants";
 
 /**
  * Formats a Date object into a GMT string.

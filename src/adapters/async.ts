@@ -4,7 +4,7 @@ import { LoginEvent, LoginEvents } from "../core/events";
 import LoginFlow from "../flows/login";
 import Operation from "../core/operation";
 
-import type { Cookie, FCAOptions, CancellablePromise } from "../types";
+import type { Cookie, FCAOptions, CancellablePromise, LoginResult } from "../types";
 
 import { defaultFCAOptions } from "../utils/constants";
 
@@ -23,12 +23,12 @@ export async function loginAsync(cookie: Cookie, options?: FCAOptions | undefine
   const login = bus.createDomain("login");
   
   // Announce the start of the login process
-  login.emit(LoginEvent.START, { userID: null, fcaOptions: options });
+  login.emit(LoginEvent.START, { fcaOptions: options });
   
   const promise = new Promise((resolve, reject) => {
-    const ok = ({ userID, appID, fcaOptions }: { userID: string, appID: string, fcaOptions: FCAOptions }) => {
+    const ok = (loginResult: LoginResult) => {
       cleanup();
-      resolve({ userID, appID, fcaOptions });
+      resolve(loginResult);
     };
 
     const bad = ({ error }: { error: Error }) => {
@@ -37,15 +37,15 @@ export async function loginAsync(cookie: Cookie, options?: FCAOptions | undefine
     };
 
     function cleanup() {
-      login.off(LoginEvent.SUCCESS, ok);
+      login.off(LoginEvent.COMPLETE, ok);
       login.off(LoginEvent.ERROR, bad);
     }
 
     // These listeners will call after the LoginFlow() completes.
-    login.once(LoginEvent.SUCCESS, ok);
+    login.once(LoginEvent.COMPLETE, ok);
     login.once(LoginEvent.ERROR, bad);
 
-    login.emit(LoginEvent.START, { userID: null, fcaOptions: options });
+    login.emit(LoginEvent.START, { fcaOptions: options });
 
     const flow = new LoginFlow({ cookie, options, operation: op });
 

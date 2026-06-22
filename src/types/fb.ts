@@ -130,9 +130,39 @@ export interface AnalyticsCoreData {
   stateful_events_list_for_br: string[];
 }
 
+interface MqttWebConfig {
+  fbid: string;
+  appID: number;
+  endpoint: string;
+  pollingEndpoint: string;
+  subscribedTopics: any[];
+  /** default: 10 */
+  capabilities: number;
+  /** default: 3 */
+  clientCapabilities: number;
+  chatVisibility: boolean;
+  hostNameOverride: string;
+}
+
+interface MessengerWebRegion {
+  regionNullable: string;
+}
+
+interface ServerAppID {
+  app_id: `${number}`;
+}
+
+interface MqttWebDeviceID {
+  clientID: string;
+}
+
 /** Yo! */
 export interface ConfigTypeMap {
   /** BRO! */
   CurrentUserInitialData: CurrentUserInitialData;
   AnalyticsCoreData: AnalyticsCoreData;
+  MqttWebConfig: MqttWebConfig;
+  MessengerWebRegion: MessengerWebRegion;
+  ServerAppID: ServerAppID;
+  MqttWebDeviceID: MqttWebDeviceID;
 }

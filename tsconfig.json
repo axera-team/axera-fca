@@ -12,6 +12,6 @@
     "skipLibCheck": true,
     "types": ["node"],
   },
-  "include": ["src/**/*", "node_modules/@types/**/*"],
-  "exclude": ["src/api/*"]
+  "include": ["src/**/*", "node_modules/@types/**/*", "api/listenMqtt.js"],
+  "exclude": ["src/apis/*", "src/api/*"]
 }

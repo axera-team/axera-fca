@@ -3,7 +3,7 @@ import HttpClient from "./client";
 
 import type {
   FBApiParams,
-  SessionContext
+  UserSessionContext
 } from "../types/index";
 
 interface GET_PARAMETERS {
@@ -28,7 +28,7 @@ interface POST_FORM_DATA_PARAMETERS {
 interface APIClientOptions {
   html?: string;
   userID?: string;
-  sessionContext?: SessionContext & object;
+  userSessionContext?: UserSessionContext & object;
   httpClient?: null | HttpClient;
 }
 
@@ -37,7 +37,7 @@ class ApiClient {
   #fb_dtsg: string;
   #revision: string;
   #userID: string;
-  #ctx: SessionContext;
+  #ctx: UserSessionContext;
   #ttstamp: string;
   #jazoest: string;
 
@@ -51,7 +51,7 @@ class ApiClient {
   constructor({
     html = "",
     userID = "",
-    sessionContext = {},
+    userSessionContext = {},
     httpClient = null,
   }: APIClientOptions = {}) {
     if (!html || typeof html !== "string") {
@@ -85,7 +85,7 @@ class ApiClient {
     }
 
     this.#userID = userID;
-    this.#ctx = sessionContext;
+    this.#ctx = userSessionContext;
 
     this.#init(httpClient);
 
@@ -206,7 +206,7 @@ class ApiClient {
    *
    * @returns - The configured parameters for Facebook API requests.
    */
-  buildFBApiParams(overrides = {}, context: SessionContext | any = {}) {
+  buildFBApiParams(overrides = {}, context: UserSessionContext | any = {}) {
     const params: FBApiParams = {
       av: this.#userID,
       __user: this.#userID,

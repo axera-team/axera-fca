@@ -1,5 +1,4 @@
-// traced.ts — drop this into any project that needs observability
-// Point OBS_URL to your server
+// Observability for Errors and Problems
 
 const OBS_URL = process.env.OBS_URL ?? 'http://localhost:4200';
 const ENV     = process.env.NODE_ENV ?? 'dev';

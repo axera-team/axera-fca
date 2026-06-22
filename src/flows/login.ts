@@ -1,25 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
+
 import { CookieJar } from "tough-cookie";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { createRequire } from "module";
 
-
 import { Logger } from "../utils/logging";
-
+import { LegacyApiManager } from "../core/legacy-api-manager";
 import { LoginEvent, LoginEvents } from "../core/events";
-import Operation from "../core/operation";
 import { EventBus, Channel } from "../core/bus";
 
-import ApiRegistry from "../core/api-registry";
-
+import Operation from "../core/operation";
 import HttpClient from "../http/client";
 import LoginHelpers from "./loginHelpers";
-import { SessionContext as UserSessionContext, Cookie, Appstate, FCAOptions, LoginFlow as LoginFlowInterface, ApiClient, SessionContext } from "../types";
-import { ApiConstructorType } from "../core/api";
 import LegacyApiRegistry from "../core/legacy-api-registry";
-import { LegacyApiManager } from "../core/legacy-api-manager";
+
+import { UserSessionContext, Cookie, Appstate, FCAOptions, LoginFlow as LoginFlowInterface, LoginResult, ApiClient } from "../types";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -32,51 +29,12 @@ interface LoginFlowOptions {
   options: FCAOptions;
 }
 
-interface LoginResult {
-  code: string;
-  success: boolean;
-  response: { 
-    apiClient: ReturnType<ApiClient['getApiClient']>,
-    session: UserSessionContext
-    userID: string;
-    appID: string;
-  } | null;
-  error: Error | null;
-  cancelled: boolean;
-}
-/**
- * The Old Infamous CJS Factory
- * 
- * ```js
- * function(defaultFuncs, api, ctx) { 
- *  return function() {}
- * }
- * ```
- * 
- * @deprecated This is the old way API modules were defined, and is still supported for backward compatibility. However, it is recommended to use the new class-based approach for better readability, maintainability, and type safety.
- * 
- * @param defaultFuncs - Default functions refer to API HTTP Client (get, post, postFormData) that can be used to make API calls, and are passed as the first argument to the factory function for backward compatibility. However, it is recommended to use the API client provided in the new class-based approach for better consistency and maintainability.
- * @param api - The API object containing all the currently loaded API modules, which can be used to call other API modules within an API module. This is passed as the second argument to the factory function for backward compatibility, but it is recommended to use the new class-based approach for better readability and maintainability.
- * @param ctx - The session context, which contains information about the current session, such as userID, appID, etc.
- * 
- * @returns A function that does a specific task, which can be used to interact with the Facebook Messenger API.
- * 
- * This is the old way API modules were defined, and is still supported for backward compatibility. However, it is recommended to use the new class-based approach for better readability, maintainability, and type safety.
- */
-interface ApiModuleV1 {
-  default: (defaultFuncs: ApiClient['getApiClient'], api: LoginFlowInterface['API'], ctx: SessionContext) => (...args: any[]) => Promise<any> | any;
-}
-
-interface ApiModuleV2 {
-  name: string;
-  execute(...args: any[]): Promise<any>;
-}
-
-const logger = new Logger({ scope: "Login" });
+const logger = new Logger({ scope: "Login", color: "instagram", debugMode: true });
 
 /**
- * Step 1: Get jar
- * Step 2: Set cookie
+ * The Facebook Client API Login Process
+ * 
+ * {@link LoginFlow} - Explore the class here!
  */
 class LoginFlow {
   #operation: Operation;
@@ -88,12 +46,10 @@ class LoginFlow {
 
   #bus: EventBus<LoginEvents> | Channel<LoginEvents> | null = null;
 
+  public fcaOptions: FCAOptions;
   public httpClient: ReturnType<HttpClient['getClient']>;
   public apiClient: ApiClient;
-  public api: LoginFlowInterface['API'];
   public cancelled: boolean;
-
-  public fcaOptions: FCAOptions;
   
   /**
    * Initialize the LoginFlow instance.
@@ -272,7 +228,10 @@ class LoginFlow {
       this.#progress({ phase: "success_login" });
       
       const ctx = sessionContext;
+      ctx.globalOptions = this.fcaOptions;
       this.#userSessionContext = ctx;
+
+      logger.debug("User session context!!", { userSessionContext: this.#userSessionContext })
       
       /**
        * For debugging purposes, you can log the session context here to see what information is available. This context contains important details that are used for subsequent API calls and MQTT connections. You can log it like this:
@@ -285,7 +244,7 @@ class LoginFlow {
        */
       
       /** Do not confuse apiClient with api, as they serve different purposes. `apiClient` refers to the API client instance, while `api` refers to the API functions loaded into the flow. You want api. */
-      return { apiClient: apiClient.getApiClient(), session: ctx };
+      return { apiClient: apiClient.getApiClient(), userSessionContext: ctx };
     } catch (error) {
       logger.error("Login failed", error);
     }
@@ -314,7 +273,6 @@ class LoginFlow {
       };
       if (!this.#userSessionContext || !this.#userSessionContext.userID || !this.#userSessionContext.appID) {
         logger.error("User session context is missing or invalid");
-        console.dir(this.#userSessionContext, { depth: null });
         return {
           code: "LOGIN_FAILURE_NO_SESSION_CONTEXT",
           success: false,
@@ -326,20 +284,17 @@ class LoginFlow {
       return {
         code: 'LOGIN_SUCCESS',
         success: true,
-        response: {
-          userID: this.#userSessionContext.userID,
-          appID: this.#userSessionContext.appID,
-          ...login
-        }, 
+        response: login, 
         error: null,
         cancelled: this.cancelled
-      };
+      } satisfies LoginResult as LoginResult;
     } catch (err) {
       return { code: 'CATCH_INTERNAL_ERROR', success: false, response: null, error: err, cancelled: this.cancelled };
     }
   }
 
   createConsoleObserver(bus: EventBus<any>) {
+    const logger = new Logger({ scope: "FCA Login", color: "teen", debugMode: true });
     bus.onAny(({ name, args }) => {
       const payload = args?.[0];
 
@@ -352,7 +307,7 @@ class LoginFlow {
           logger.error(`${payload.error.message}`);
           break;
 
-        case "login:success":
+        case "login:complete":
           logger.success(`Login successful`);
           break;
       }
@@ -362,20 +317,47 @@ class LoginFlow {
 
 class Login extends LoginFlow {
   apiManager: LegacyApiManager | null = null;
+  protected api: LoginFlowInterface['API'];
 
   constructor({ operation, cookie, options }: LoginFlowOptions) {
     super({ operation, cookie, options });
+    this.apiManager = new LegacyApiManager({ apiClient: this.apiClient, userSessionContext: this.getSessionContext() || {} });
+
+    this.addAPI = this.addAPI.bind(this);
+    this.removeAPI = this.removeAPI.bind(this);
+    this.tryLoadAPI = this.tryLoadAPI.bind(this);
+    this.getAPI = this.getAPI.bind(this);
+    this.getAllAPIs = this.getAllAPIs.bind(this);
+    this.getApiCount = this.getApiCount.bind(this);
+
+    this.setupProxy();
+  }
+
+   /**
+   * Generates a proxy wrapper around the registry that forces individual 
+   * API methods to run with access to 'this' instance context.
+   */
+  private setupProxy() {
+    const registryProxy = LegacyApiRegistry.proxy();
+    
+    this.api = new Proxy(registryProxy, {
+      get: (target, prop: string) => {
+        const method = target[prop];
+        if (typeof method === 'function') {
+          // Bind the API method execution context cleanly to this Login instance
+          return method.bind(this);
+        }
+        return method;
+      }
+    }) as unknown as LoginFlowInterface['API'];
   }
 
   registerAPIs() {
-    const logger = new Logger({ scope: "API Loader" });
-    const apiClient = this.apiClient;
-    if (!apiClient) {
+    const logger = new Logger({ scope: "API Loader", color: 'fruit' });
+
+    if (!this.apiClient) {
       throw new Error("API client is missing in this FCA. Possible reasons include incorrect configuration or missing dependencies. Or you are trying to load APIs before the login flow is completed. Ensure that you are waiting for the login flow to complete successfully before loading APIs, and double-check your configuration and dependencies.");
     }
-
-    this.apiClient = apiClient;
-    this.apiManager = new LegacyApiManager({ apiClient, sessionContext: this.getSessionContext() || {} });
     
     const apiPath = path.join(__dirname, "..", "api");
     const apiFiles = fs
@@ -406,13 +388,15 @@ class Login extends LoginFlow {
   }
 
   private tryLoadAPI(moduleExports: any, apiName: string): Function | null {
+    const api = this.api;
+
     // Load the legacy default export style
     if (moduleExports && typeof moduleExports.default === "function") {
-      return moduleExports.default(this.apiClient.getApiClient(), this.api, this.getSessionContext());
+      return moduleExports.default(this.apiClient.getApiClient(), api, this.getSessionContext());
     }
 
     if (moduleExports && typeof moduleExports === "function") {
-      return moduleExports(this.apiClient.getApiClient(), this.api, this.getSessionContext());
+      return moduleExports(this.apiClient.getApiClient(), api, this.getSessionContext());
     }
 
     return null; // No usable export found
@@ -422,12 +406,12 @@ class Login extends LoginFlow {
     // It is in memory for now but will be persisted to disk later
     // This is made so hooking into the API is easier
     LegacyApiRegistry.add(name, fn);
-    this.api = LegacyApiRegistry.proxy(); // refresh surface
+    this.setupProxy(); // refresh surface
   };
   
   removeAPI(name: string) {
     LegacyApiRegistry.delete(name);
-    this.api = LegacyApiRegistry.proxy(); // refresh surface
+    this.setupProxy(); // refresh surface
   };
 
   getAPI(name: string) {
@@ -435,7 +419,11 @@ class Login extends LoginFlow {
   }
 
   getAllAPIs() {
-    return LegacyApiRegistry.proxy();
+    return LegacyApiRegistry.expose();
+  }
+
+  getApiCount() {
+    return Object.keys(LegacyApiRegistry.expose()).length;
   }
 }
 

@@ -240,7 +240,7 @@ export class LegacyApiRegistry {
         if (LegacyApiRegistry.has(name)) {
           return { configurable: true, enumerable: true, writable: false };
         }
-      }
+      },
     });
   }
 }

@@ -90,7 +90,7 @@ class HttpClient {
     string,
     import('undici').Dispatcher
   >;
-  #jar: CookieJarT;
+  #jar: CookieJarT | null;
   #agent: import('undici').Dispatcher | null = null;
   #clientCache: ReturnType<HttpClient['getClient']> | null = null;
   #customHeaders: Record<string, any> | null = null;
@@ -173,13 +173,18 @@ class HttpClient {
   }
 
   constructor({ proxy, jar, keepAlive, timeout, maxSockets, singletonEnabled = true }: { proxy?: string | ProxyObject | null, jar?: CookieJar | null, keepAlive?: boolean, timeout?: number, maxSockets?: number, singletonEnabled?: boolean } = {}) {
-    this.#jar = jar || new CookieJar();
+    this.#jar = jar || null;
 
     this.keepAlive = !!keepAlive!;
     this.proxy = proxy!;
     this.timeout = timeout! || 20000;
     this.maxSockets = maxSockets! || 30;
     this.singletonEnabled = !!singletonEnabled;
+
+    if (!this.#jar) {
+      this.#jar = new CookieJar();
+      HttpClient.logger.warn('No cookie jar has been injected, you need a cookie session to visit FB api.');
+    }
     
     if (this.singletonEnabled) {
       if (!HttpClient.singletonInstance) {
